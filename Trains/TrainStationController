@@ -1,0 +1,345 @@
+-- Train Network - Station Controller
+-- 	XizzleBot
+
+local VERSION = "1.0"
+local MODEM_SIDE = "bottom"
+local BROADCAST_CHANNEL = 17225
+local SYSTEM_CHANNEL = 17250
+local SCRIPT_PATH = arg[0]
+local BROADCAST_RATE = 2
+local CONFIG_FILE = "TS_Config"
+
+modem.open()
+
+-- Station Config  
+--    Add one entry for each station. Can have multiple stations controlled by one computer
+--	  Side or NetworkName.  Format: { "stationBlock", "blockReader" }
+local STATION_PERIPHERALS = {
+	{ "Create_Station_1", "blockReader_5" },
+	{ "Create_Station_0", "blockReader_6" },
+	{ "Create_Station_2", "blockReader_7" },
+	{ "Create_Station_3", "blockReader_4" },
+	{ "Create_Station_4", "blockReader_8" },
+	{ "Create_Station_5", "blockReader_9" }
+}
+
+-- File Ops
+local function getExecutingDir()
+     local pParts = strSplit(SCRIPT_PATH, "/")
+	 return SCRIPT_PATH:sub(1, SCRIPT_PATH:len() - pParts[#pParts]:len())
+end
+
+local function installAsStartup()
+	local stString = 'shell.run("'..SCRIPT_PATH..'", "start")'
+	local stPath = "startup"
+	local accessType = "w+"
+
+	if fs.exists("startup.lua") then stPath = "startup.lua" end
+	if fs.exists(stPath) then accessType = "r+" end
+	
+	local file = fs.open(stPath, accessType)
+	local fContent = file.readAll()
+	
+	if not fContent:find(stString, 1, true) then
+		if fContent:len() > 0 then file.write("\n") end
+		file.write("--Train Display Controller\n"..stString) 
+	end
+	
+	file.close()
+end
+
+local function softwareUpdate(newScript)
+	local file = fs.open(SCRIPT_PATH, "w")
+	file.write(newScript)
+	installAsStartup()
+	os.reboot()
+end
+
+local function hasConfig()
+	return fs.exists(CONFIG_FILE)
+end
+
+local function readConfig(tbl)
+	if hasConfig() then
+		local file = fs.open(CONFIG_FILE, "r")
+		local loadObj = textutils.unserialise(file.readAll())
+		
+		MODEM_SIDE = loadObj.MODEM_SIDE
+		STATION_PERIPHERALS = loadObj.SAVE_DATA
+		
+		--bPrint("Config file <col:green> Loaded!")
+	end
+end
+
+local function saveConfig(tbl)
+	local file = fs.open(CONFIG_FILE, "w")
+	local saveObj = {}
+	
+	saveObj.MODEM_SIDE = MODEM_SIDE
+	saveObj.SAVE_DATA = tbl
+	
+	file.write(textutils.serialise(saveObj))
+	file.close()
+	--bPrint("Config file <col:yellow> Saved!")
+end
+
+-- Data
+local stations = {}
+
+local function getTranslateTimeFormat(tns)
+	for _,v in ipairs(tns) do
+		if v:find("station_summary.minutes") or v:find("generic.unit.minutes") then return "min" end
+		if v:find("station_summary.seconds") or v:find("generic.unit.seconds") then return "sec" end
+		if v:find("station_summary.now") then return "now" end
+	end
+end
+
+local function getDataFromCreateDisplay(bd)
+	--Parse Create Display
+	local res = {}
+	local tObjs = {}
+	
+	for k,v in pairs(bd) do
+		if k:find("Display") == 1 then
+			for _, sect in ipairs(v.Sections) do
+				table.insert(tObjs, textutils.unserialiseJSON(sect.Text))
+			end	
+		end
+	end
+
+	--arrive format
+	local arrivalTranslates = {}
+	for _, tObj in pairs(tObjs) do
+		for tk,tv in pairs(tObj) do
+			if tk == "translate" then table.insert(arrivalTranslates, tv) end
+		end
+	end
+	
+	local arrivalTime = nil
+	local arrivalFormat = getTranslateTimeFormat(arrivalTranslates)
+	local arrivalString = nil
+	local hasArrival = false
+	
+	local arrivingTrain = nil --ariving train
+	if tObjs[#tObjs-1].text ~= " " then 
+		arrivingTrain = tObjs[#tObjs-1].text 
+		hasArrival = true
+	end
+	local nextStop = nil
+	if tObjs[#tObjs].text ~= " " then nextStop = tObjs[#tObjs].text end
+	
+	
+	local departureTime = nil
+	local departureFormat = nil
+	local departureString = nil
+	local hasDeparture = false
+	
+	--arrive time
+	if arrivalFormat == "min" then
+		arrivalTime = tObjs[2].text
+		arrivalString = arrivalTime.."min"
+	elseif arrivalFormat == "sec" then
+		arrivalTime =  tObjs[3].with[1]
+		arrivalString = arrivalTime.."sec"
+	elseif arrivalFormat == "now" then
+		arrivalTime = 0
+		arrivalString = "now"
+		
+		--depart time
+		if tObjs[1].with and arrivalFormat == "now" then
+			hasDeparture = true
+			departureFormat = getTranslateTimeFormat({ tObjs[1].with[1].extra[1].translate })
+
+			if departureFormat == "now" then
+				departureTime = 0
+				departureString = "now"
+			elseif departureFormat == "sec" then
+				departureTime = tObjs[1].with[1].text
+				departureString = departureTime.."sec"
+			elseif departureFormat == "min" then
+				departureTime = tObjs[1].with[1].text
+				departureString = departureTime.."min"
+			end
+		end
+	end
+
+	
+	if (hasArrival) then
+		res.arrivalData = {}
+		res.arrivalData.arrivalTime = arrivalTime
+		res.arrivalData.arrivalFormat = arrivalFormat
+		res.arrivalData.arrivalString = arrivalString
+		res.arrivalData.trainName = arrivingTrain
+		res.arrivalData.nextStop = nextStop
+	end
+	
+	if hasDeparture then
+		res.departureData = {}
+		res.departureData.departureTime = departureTime
+		res.departureData.departureFormat = departureFormat
+		res.departureData.departureString = departureString
+	end
+	
+	return res
+end
+
+local function setupStationData()
+	bPrint("<br><col:lightGray>Waiting for Stations Blocks to load...")
+	for _,pData in ipairs(STATION_PERIPHERALS) do
+		local sBlock = nil
+		local  bBlock = nil
+		
+		while not sBlock do
+			sBlock = peripheral.wrap(pData[1])
+			brBlock = peripheral.wrap(pData[2])
+		end
+		
+		local sName = sBlock.getStationName()
+		bPrint("<col:white>Registered station: <col:yellow>"..sName)
+		
+		stations[sName] = {
+			peripheral = sBlock,
+			blockReader = brBlock,
+			data = { stationData = {} }
+		}
+	end
+	bPrint("Setup Complete!")	
+end
+
+local function updateStationData(station)
+	local stBlock = station.peripheral
+	local sData = station.data.stationData
+
+	--Station
+	sData.stationName = stBlock.getStationName()
+	sData.isTrainPresent = stBlock.isTrainPresent()
+
+	sData.isTrainImminent = stBlock.isTrainImminent()
+	sData.isTrainEnroute = stBlock.isTrainEnroute()
+
+	if sData.isTrainPresent then
+		--Train
+		local tData = {}
+		tData.trainName = stBlock.getTrainName()
+		if stBlock.hasSchedule() then tData.shedule = stBlock.getSchedule() end
+		
+		sData.trainData = tData
+	else sData.trainData = nil end
+	
+	local br = station.blockReader
+	if br then
+		--Create Display Data Available
+		local cdData = getDataFromCreateDisplay(br.getBlockData())
+		station.data.arrivalData = cdData.arrivalData
+		station.data.departureData = cdData.departureData
+	end
+end
+
+-- Message Handling
+local messageQueue = {}
+local modem = peripheral.wrap(MODEM_SIDE)
+
+local function processQueue()
+	while #messageQueue > 0 do
+		local msg = table.remove(messageQueue, 1)
+		if type(msg) == "table" and msg.msgTag == "TRAINSYS" then
+			if (not msg.msgTarget) or (msg.msgTarget == os.getComputerID()) then
+				local command = msg.msgCmd
+				local msgData = msg.msgData
+
+				if command == "SOFTWARE_UPDATE" then
+					local pp = strSplit(SCRIPT_PATH, "/")
+					local scriptName = pp[#pp]
+					
+					if msgData.scriptName == scriptName and msgData.version ~= VERSION then
+						softwareUpdate(msgData.script)
+					end		
+				end
+			end
+		end
+	end
+end
+
+local function receiveLoop()
+	while true do
+		local event, side, senderChannel, replyChannel, message, distance = os.pullEvent("modem_message")
+		if (senderChannel == SYSTEM_CHANNEL) then
+			table.insert(messageQueue, message)
+		end
+	end
+end
+
+local function broadcastStationData(stData)
+	local msg = {}
+	msg.msgTag = "TRAINSYS"
+	msg.msgCmd = "STATION_UPDATE"
+	msg.msgData = stData
+	
+	modem.transmit(BROADCAST_CHANNEL, BROADCAST_CHANNEL, msg)
+	
+	bPrint("Broadcasting..")
+	dumpTable(stData)
+	
+end
+
+-- Update
+local function updateLoop()
+	while true do
+		--Handle Messages
+		processQueue()
+		
+		--Update and Broadcast Station Data
+		for _,v in pairs(stations) do
+			updateStationData(v)
+			broadcastStationData(v.data)
+		end
+
+		--Wait for next
+		sleep(BROADCAST_RATE)
+	end
+end
+
+-- Startup
+local function start()
+	scrClear()
+	scrClearLine(colors.gray)
+	bPrint("<bcol:gray><col:yellow>TTN Station Controller <col:lightGray>v"..VERSION.."<ri><col:black>XizzleBot")
+
+	if hasConfig() then readConfig(STATION_PERIPHERALS)
+	else saveConfig(STATION_PERIPHERALS) end
+
+	modem.open(BROADCAST_CHANNEL)
+	modem.open(SYSTEM_CHANNEL)
+
+	setupStationData()
+	bPrint("<br><col:lightGray>Running...")
+	
+	parallel.waitForAll(receiveLoop, updateLoop)
+end
+
+--Ran Globally
+args = {...}
+
+for k, v in pairs(args) do
+  if v == "start" then
+    start()
+  end
+  
+  if v == "install" then
+	scrClear()
+	scrClearLine(colors.gray)
+	bPrint("<bcol:gray><col:yellow>TTN Station Controller<col:lightGray> - <bcol:red><col:gray>Installer<bcol:gray><ri>XizzleBot") sleep(0.5)
+	scrPos(1,3)
+	bWrite("Installing.") sleep(0.5) bWrite(".") sleep(0.5) bPrint(".") sleep(0.5)
+	bWrite("<col:gray>-> <col:lightGray>Adding to Startup...") sleep(1) 
+	installAsStartup() bPrint("<col:green>DONE!") sleep(0.5)
+	bWrite("<col:gray>-> <col:lightGray>Writing Config...") sleep(1) 
+	if hasConfig() then readConfig(STATION_PERIPHERALS)
+	else saveConfig(STATION_PERIPHERALS) end
+	bPrint("<col:green>DONE!") sleep(0.5)
+	bPrint("<br><col:white>Install Completed!<br><col:lightGray>Rebooting in <col:red>5<col:lightGray> seconds..")
+	sleep(5)
+	os.reboot()
+  end
+  
+end

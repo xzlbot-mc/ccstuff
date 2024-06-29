@@ -1,0 +1,359 @@
+-- Train Network - Display Controller
+-- 	XizzleBot
+
+local VERSION = "1.0"
+local MODEM_SIDE = "top"
+local BROADCAST_CHANNEL = 17225
+local SYSTEM_CHANNEL = 17250
+local SCRIPT_PATH = arg[0]
+local REFRESH_RATE = 0.1
+local SCROLL_DELAY = 5
+local CONFIG_FILE = "TD_Config"
+local MOTD = "Welcome to the train station! Please stand clear of the platform edge."
+
+-- Station Config  
+--    Add one entry for each monitor.  Can have multiple monitors showing the same station.
+--    Format: { "name", "monitorSideOrNetworkname", accentColor }
+local STATION_INFO = {
+	{ "Grand Spawn Station 5N", "right", colors.gray },
+	{ "Grand Spawn Station 6N", "left", colors.brown },
+}
+
+
+-- File Ops
+local function getExecutingDir()
+     local pParts = strSplit(SCRIPT_PATH, "/")
+	 return SCRIPT_PATH:sub(1, SCRIPT_PATH:len() - pParts[#pParts]:len())
+end
+
+local function installAsStartup()
+	local stString = 'shell.run("'..SCRIPT_PATH..'", "start")'
+	local stPath = "startup"
+	local accessType = "w+"
+
+	if fs.exists("startup.lua") then stPath = "startup.lua" end
+	if fs.exists(stPath) then accessType = "r+" end
+	
+	local file = fs.open(stPath, accessType)
+	local fContent = file.readAll()
+	
+	if not fContent:find(stString, 1, true) then
+		if fContent:len() > 0 then file.write("\n") end
+		file.write("--Train Display Controller\n"..stString) 
+	end
+	
+	file.close()
+end
+
+local function softwareUpdate(newScript)
+	local file = fs.open(SCRIPT_PATH, "w")
+	file.write(newScript)
+	installAsStartup()
+	os.reboot()
+end
+
+local function hasConfig()
+	return fs.exists(CONFIG_FILE)
+end
+
+local function readConfig(tbl)
+	if hasConfig() then
+		local file = fs.open(CONFIG_FILE, "r")
+		local loadObj = textutils.unserialise(file.readAll())
+		
+		MODEM_SIDE = loadObj.MODEM_SIDE
+		STATION_INFO = loadObj.SAVE_DATA
+		
+		--bPrint("Config file <col:green> Loaded!")
+	end
+end
+
+local function saveConfig(tbl)
+	local file = fs.open(CONFIG_FILE, "w")
+	local saveObj = {}
+	
+	saveObj.MODEM_SIDE = MODEM_SIDE
+	saveObj.SAVE_DATA = tbl
+	
+	file.write(textutils.serialise(saveObj))
+	file.close()
+	--bPrint("Config file <col:yellow> Saved!")
+end
+
+-- Data
+local displayData = {}
+
+local function getScheduleInfo(schedule)
+    local destination = "N/A"
+    local departureTime = "N/A"
+
+    if schedule and schedule.entries then
+        for _, entry in ipairs(schedule.entries) do
+            if entry.instruction.id == "create:destination" then
+                destination = entry.instruction.data.text
+                break
+            end
+        end
+        -- Assuming schedule data has departure time if applicable
+        for _, entry in ipairs(schedule.entries) do
+            if entry.conditions then
+                for _, conditionList in ipairs(entry.conditions) do
+                    for _, condition in ipairs(conditionList) do
+                        if condition.id == "create:time_of_day" then
+                            local hour = condition.data.hour or 0
+                            local minute = condition.data.minute or 0
+                            departureTime = string.format("%02d:%02d", hour, minute)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return destination, departureTime
+end
+
+local function createMonitorDataObj(mon, accentColor)
+	local w, h = mon.getSize()
+	local res = {}
+	
+	--Periph and Info
+	res.Monitor = mon
+	res.Size = { Width = w, Height = h }
+	
+	--Text
+	res.Lines = {}
+	for i=1,h do 
+		res.Lines[i] = { Text = "", TextRaw = "", ScrollIndex = 1, Delay = SCROLL_DELAY, BackColor = colors.black } 
+	end
+	
+	--Accent
+	res.Lines[1].BackColor = accentColor
+	res.Lines[5].BackColor = accentColor
+	
+	--Funcs
+	res.Clear = function()
+		scrClear(mon)
+	end
+	
+	res.Draw = function()
+		local oBCol = mon.getBackgroundColor()
+		for r, lData in ipairs(res.Lines) do
+			if #lData.TextRaw > w then
+				mon.setCursorPos(lData.ScrollIndex, r)
+				mon.setBackgroundColor(res.Lines[r].BackColor)
+				mon.clearLine()
+
+				if lData.Delay > 0 then
+					bWrite(lData.Text, mon)
+					lData.Delay = lData.Delay - REFRESH_RATE
+					goto mDrawContinue
+				end	
+				bWrite(lData.Text, mon)
+				
+				if res.Lines[r].ScrollIndex == 2 then
+					res.Lines[r].Delay = SCROLL_DELAY
+				end
+				
+				res.Lines[r].ScrollIndex = res.Lines[r].ScrollIndex -1
+				
+				if res.Lines[r].ScrollIndex == -(#lData.TextRaw) then
+					res.Lines[r].ScrollIndex = w
+				end
+				
+			else
+				mon.setCursorPos(1, r)
+				mon.setBackgroundColor(res.Lines[r].BackColor)
+				mon.clearLine()
+				
+				bWrite(lData.Text, mon)
+			end
+			
+			--time
+			if r == 1 then
+				bWrite("<ri>"..textutils.formatTime(os.time(), true), mon)
+			end
+
+			::mDrawContinue::
+		end
+		mon.setBackgroundColor(oBCol)
+	end
+	
+	return res
+end
+
+local function updateMonitorData(data)
+	--dumpTable(displayData)
+	--dumpTable(data.stationData)
+
+	--Default display
+	local newLines = {
+		data.stationData.stationName,
+		"<col:gray> ---",
+        "<col:gray> ---",
+        "<col:gray> ---",
+        "<col:white>"..MOTD
+	}
+	
+	local trainName = nil
+    local destination = "---"
+	local infoLine = "---"
+	
+	local dObj = displayData[data.stationData.stationName]
+	--bPrint("Received...<col:red>"..data.stationData.stationName)
+
+	if data.stationData.isTrainPresent then
+		local trData = data.stationData.trainData
+		if trData.schedule then
+            destination, _ = getScheduleInfo(trData.schedule)
+        end
+	
+        trainName = trData.trainName
+		newLines[2] = " <col:yellow>"..trainName.."<ri> now"
+		
+		if data.arrivalData then
+			newLines[3] = "<col:lightGray>  --> <col:red>"..data.arrivalData.nextStop
+		end
+		
+		newLines[4] = "<col:white> Now Boarding"
+		
+		if data.departureData then
+			local dpData = data.departureData
+			newLines[4] = "<col:white> Departing in <col:yellow>"..dpData.departureString
+		end
+		
+        
+    elseif data.arrivalData and data.arrivalData.arrivalString then
+		--No train present, but one on the way
+		local arData = data.arrivalData
+		trainName = arData.trainName
+		newLines[2] = " <col:yellow>"..trainName.."<col:yellow><ri>"..arData.arrivalString
+		newLines[3] = "<col:lightGray> ---> <col:red>"..arData.nextStop
+	end
+	
+	if not dObj then return end
+	
+	for i, str in ipairs(newLines) do
+        for _, m in ipairs(dObj.Monitors) do
+			if m.Lines[i].Text ~= str then
+				m.Lines[i].Text = str
+				m.Lines[i].TextRaw = stripTags(str)
+				
+				m.Lines[i].ScrollIndex = 1
+			end
+		end
+    end
+end
+
+local function redrawMonitors()
+	for sName,dObj in pairs(displayData) do	
+		for _, mData in ipairs(dObj.Monitors) do 
+			mData.Draw() 
+		end
+	end
+end
+
+-- Message Handling
+local messageQueue = {}
+local modem = peripheral.wrap(MODEM_SIDE)
+
+local function processQueue()
+	while #messageQueue > 0 do
+		local msg = table.remove(messageQueue, 1)
+		if type(msg) == "table" and msg.msgTag == "TRAINSYS" then	
+			if (not msg.msgTarget) or (msg.msgTarget == os.getComputerID()) then
+				local command = msg.msgCmd
+				local msgData = msg.msgData
+				if command == "STATION_UPDATE" then
+					updateMonitorData(msgData)
+				end
+				
+				if command == "SOFTWARE_UPDATE" then
+					local pp = strSplit(SCRIPT_PATH, "/")
+					local scriptName = pp[#pp]
+					
+					if msgData.scriptName == scriptName and msgData.version ~= VERSION then
+						softwareUpdate(msgData.script)
+					end		
+				end
+			end
+		end
+	end
+end
+
+local function receiveLoop()
+	while true do
+		local event, side, senderChannel, replyChannel, message, distance = os.pullEvent("modem_message")
+		if (senderChannel == BROADCAST_CHANNEL) or (senderChannel == SYSTEM_CHANNEL) then
+			table.insert(messageQueue, message)
+		end
+	end
+end
+
+-- Update
+local function updateLoop()
+	while true do
+		--Handle Messages
+		processQueue()
+		
+		--Redraw Monitors
+		redrawMonitors()
+		
+		--Wait for next
+		sleep(REFRESH_RATE)
+	end
+end
+
+-- Startup
+local function start()
+	scrClear()
+	scrClearLine(colors.gray)
+	bPrint("<bcol:gray><col:yellow>TTN Display Controller <col:lightGray>v"..VERSION.."<ri><col:black>XizzleBot")
+
+	if hasConfig() then readConfig(STATION_INFO)
+	else saveConfig(STATION_INFO) end
+
+	modem.open(BROADCAST_CHANNEL)
+	modem.open(SYSTEM_CHANNEL)
+
+	for _, info in ipairs(STATION_INFO) do
+		local sName = info[1]
+		if not displayData[sName] then
+			local dObj = {}
+			dObj.StationName = sName
+			dObj.Monitors = { createMonitorDataObj(peripheral.wrap(info[2]), info[3]) }
+			displayData[sName] = dObj
+		else table.insert(displayData[sName].Monitors, createMonitorDataObj(peripheral.wrap(info[2]))) end
+		
+		
+		--updateMonitorData({ stationName = sName })
+	end
+	parallel.waitForAll(receiveLoop, updateLoop)
+end
+
+--Ran Globally
+args = {...}
+
+for k, v in pairs(args) do
+  if v == "start" then
+    start()
+  end
+  
+  if v == "install" then
+	scrClear()
+	scrClearLine(colors.gray)
+	bPrint("<bcol:gray><col:yellow>TTN Display Controller<col:lightGray> - <bcol:red><col:gray>Installer<bcol:gray><ri>XizzleBot") sleep(0.5)
+	scrPos(1,3)
+	bWrite("Installing.") sleep(0.5) bWrite(".") sleep(0.5) bPrint(".") sleep(0.5)
+	bWrite("<col:gray>-> <col:lightGray>Adding to Startup...") sleep(1) 
+	installAsStartup() bPrint("<col:green>DONE!") sleep(0.5)
+	bWrite("<col:gray>-> <col:lightGray>Writing Config...") sleep(1) 
+	if hasConfig() then readConfig(STATION_INFO)
+	else saveConfig(STATION_INFO) end
+	bPrint("<col:green>DONE!") sleep(0.5)
+	bPrint("<br><col:white>Install Completed!<br><col:lightGray>Rebooting in <col:red>5<col:lightGray> seconds..")
+	sleep(5)
+	os.reboot()
+  end
+  
+end
