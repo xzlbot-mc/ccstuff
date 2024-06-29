@@ -1,0 +1,249 @@
+-- Utility API
+--  XizzleBot
+
+--String Ops
+function strChars(str)
+    local chars = {}
+
+    for i = 1, string.len(str) do
+        chars[i] = string.sub(str, i, i)
+    end
+
+    return chars
+end
+
+function strSplit(str, splt)
+    local res = {}
+    local fIndex = string.find(str, splt)
+
+    while fIndex ~= nil do
+        res[#res + 1] = string.sub(str, 1, fIndex - 1)
+        str = string.sub(str, fIndex + string.len(splt), string.len(str))
+        fIndex = string.find(str, splt)
+    end
+
+    if string.len(str) > 0 then
+        res[#res + 1] = str
+    end
+
+    return res
+end
+function stripTags(str)
+    local chr = strChars(str)
+    local resStr = ""
+
+    for c = 1, #chr do
+        if chr[c] == ">" then
+            inTag = false
+            goto continue
+        end
+
+        if chr[c] == "<" then
+            inTag = true
+            goto continue
+        end
+
+        if not inTag then
+            resStr = resStr .. chr[c]
+        end
+
+        ::continue::
+    end
+
+    return resStr
+end
+
+function bWrite(...)
+    local str, t = ...
+    if t == nil then t = term.current() end
+
+    local tx, ty = t.getCursorPos()
+    local tw, th = t.getSize()
+    local tc = t.getTextColor()
+
+    local tbc = t.getBackgroundColor()
+    local chr = strChars(str)
+
+    local inTag = false
+    local tTag = ""
+    local indent = 0
+    local rawIndex = 1
+    local rawStr = stripTags(str)
+
+    --walk String
+    for c = 1, #chr do
+        if chr[c] == ">" and inTag then
+            inTag = false
+            local tParts = strSplit(tTag, ":")
+            if tParts[1] == "col" then
+                t.setTextColor(colors[tParts[2]])
+            end
+            if tParts[1] == "bcol" then
+                t.setBackgroundColor(colors[tParts[2]])
+            end
+            if tParts[1] == "br" then
+                t.setCursorPos(1 + indent, ty + 1)
+                tx, ty = t.getCursorPos()
+            end
+            if tParts[1] == "ri" then
+                local riX = (tw + 1) - (rawStr:sub(rawIndex):len())
+                t.setCursorPos(riX, ty)
+                tx, ty = t.getCursorPos()
+            end
+            tTag = ""
+            goto continue
+        end
+
+        if chr[c] == "<" then
+            inTag = true   --open tag
+            goto continue
+        end
+
+        if inTag then
+            tTag = tTag .. chr[c] --add to tag
+            goto continue
+        else
+            t.write(chr[c])
+            tx, ty = t.getCursorPos()
+            rawIndex = rawIndex + 1
+        end
+
+        ::continue::
+    end
+
+    t.setTextColor(tc)
+    t.setBackgroundColor(tbc)
+end
+
+function bPrint(...)
+    local str, t = ...
+    bWrite(str .. "<br>", t)
+end
+
+function scrClear(col, trm)
+    if not trm then trm = term.current() end
+
+    local oCol = trm.getBackgroundColor()
+    if col then trm.setBackgroundColor(col) end
+
+    trm.clear()
+    trm.setCursorPos(1, 1)
+
+    if col then trm.setBackgroundColor(oCol) end
+end
+
+function scrClearLine(col, trm)
+    if not trm then trm = term.current() end
+
+    local oCol = trm.getBackgroundColor()
+    if col then trm.setBackgroundColor(col) end
+
+    trm.clearLine()
+
+    if col then trm.setBackgroundColor(oCol) end
+end
+
+function scrPos(...)
+    local x, y, trm = ...
+    if not trm then trm = term.current() end
+    local tx, ty = trm.getCursorPos()
+    trm.setCursorPos(x or tx, y or ty)
+end
+
+function dumpTable(tbl)
+    local t = term.current()
+    local tw, th = t.getSize()
+
+    bPrint("Dumping Table...")
+    if not tbl then
+        bWrite("<col:red> NIL TABLE!<br>")
+        bPrint("Table END")
+        return
+    end
+
+    for k, v in pairs(tbl) do
+        local tx, ty = t.getCursorPos()
+        if ty >= th then
+            t.scroll(1)
+            scrPos(tx, th)
+        end
+
+        bWrite("<col:lightGray>" .. k)
+        bWrite(" <col:gray>: ")
+
+        if type(v) ~= "table" and type(v) ~= "function" then
+            bWrite("<col:red>" .. tostring(v))
+        else
+            bWrite("<col:red>" .. k)
+        end
+
+        bWrite("<col:yellow>  (" .. type(v) .. ")<br>")
+    end
+
+    bPrint("Table END")
+end
+
+--Table Ops
+function spairs(t, order)
+    local keys = {}
+
+    for k in pairs(t) do keys[#keys + 1] = k end
+    if order then
+        table.sort(keys, function(a, b) return order(t, a, b) end)
+    else
+        table.sort(keys)
+    end
+
+    local i = 0
+    return function()
+        i = i + 1
+        if keys[i] then
+            return keys[i], t[keys[i]]
+        end
+    end
+
+end
+
+-- File Ops
+function getDir(path)
+    local pParts = strSplit(path, "/")
+    return SCRIPT_PATH:sub(1, path:len() - pParts[#pParts]:len())
+end
+
+function addStartupAPI(apiPath, comment)
+    local stString = 'os.loadAPI("' .. apiPath .. '")'
+    local stPath = "startup"
+    local accessType = "w+"
+
+    if fs.exists("startup.lua") then stPath = "startup.lua" end
+    if fs.exists(stPath) then accessType = "r+" end
+
+    local file = fs.open(stPath, accessType)
+    local fContent = file.readAll()
+
+    if not fContent:find(stString, 1, true) then
+        if fContent:len() > 0 then file.write("\n") end
+        file.write("--" .. comment .. "\n" .. stString)
+    end
+
+    file.close()
+end
+
+function overwriteFile(path, content)
+    local file = fs.open(path, "w")
+    file.write(content)
+end
+
+function readFileToObj(path)
+    if fs.exists(path) then
+        local file = fs.open(CONFIG_FILE, "r")
+        return textutils.unserialise(file.readAll())
+    end
+    error("File not Found!")
+end
+
+function saveObjToFile(path, tbl)
+    local file = fs.open(path, "w")
+    file.write(textutils.serialise(saveObj))
+    file.close()
+end
