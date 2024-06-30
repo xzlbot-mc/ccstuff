@@ -59,7 +59,7 @@ end
 function drawTopBar()
   xUtils.scrPos(1, 1, DISPLAY)
   xUtils.scrClearLine(colors.gray, DISPLAY)
-  xUtils.bPrint("<bcol:gray><col:yellow>Colony Requests<bcol:gray><col:lightGray><br>", DISPLAY)
+  xUtils.bPrint("<bcol:gray><col:yellow>Colony Requests<br>", DISPLAY)
 end
 
 function drawButtonBar()
@@ -136,6 +136,8 @@ DISPLAY.setTextScale(0.5)
 
 xUtils.scrClear()
 xUtils.bPrint("<col:white>Colony Supplier <col:green>running...")
+
+drawTopBar()
 
 while true do
   refresh()
