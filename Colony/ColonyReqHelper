@@ -1,5 +1,5 @@
--- Colony Request Thing
---  Xizzle
+-- Colony Request Helper
+--  XizzleBot
 
 local COLONY = peripheral.wrap("right")
 local ME_SYS = peripheral.wrap("left")
