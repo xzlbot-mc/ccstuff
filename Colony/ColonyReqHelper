@@ -102,10 +102,9 @@ function pushStock(res)
       local crRes = ME_SYS.exportItem({name=req.name, count=req.count}, "down") >= req.count
       if crRes then xUtils.bPrint("<col:lightGray>Pushed <col:white>"..req.displayName.." <col:lightGray>[<col:yellow>"..req.count.."<col:lightGray>]")
       else xUtils.bPrint("<col:red>FAILED to push <col:white>"..req.displayName.." <col:lightGray>[<col:yellow>"..req.count.."<col:lightGray>]") end
+      sleep(0.5)
     end
-  end
-
-  sleep(5) --allow time for distro
+  end sleep(1)
 end
 
 function refresh()
