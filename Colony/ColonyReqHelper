@@ -6,6 +6,7 @@ local ME_SYS = peripheral.wrap("left")
 local OUT_INV = peripheral.wrap("front")
 local DISPLAY = peripheral.wrap("top")
 local REFRESH_RATE = 5
+local BRIDGE_EXPORT = "down"
 
 function getRequiredItems()
   local cReqs = COLONY.getRequests()
@@ -99,7 +100,7 @@ end
 function pushStock(res)
   for _,req in pairs(res) do 
     if req.isInStock and not req.isDomum then
-      local crRes = ME_SYS.exportItem({name=req.name, count=req.count}, "down") >= req.count
+      local crRes = ME_SYS.exportItem({name=req.name, count=req.count}, BRIDGE_EXPORT) >= req.count
       if crRes then xUtils.bPrint("<col:lightGray>Pushed <col:white>"..req.displayName.." <col:lightGray>[<col:yellow>"..req.count.."<col:lightGray>]")
       else xUtils.bPrint("<col:red>FAILED to push <col:white>"..req.displayName.." <col:lightGray>[<col:yellow>"..req.count.."<col:lightGray>]") end
       sleep(0.5)
