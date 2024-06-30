@@ -90,6 +90,11 @@ function bWrite(...)
                 t.setCursorPos(riX, ty)
                 tx, ty = t.getCursorPos()
             end
+            if tParts[1] == "i" then
+                t.setCursorPos(tonumber(tParts[2]), ty)
+                tx, ty = t.getCursorPos()
+            end
+
             tTag = ""
             goto continue
         end
