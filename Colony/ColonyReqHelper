@@ -1,0 +1,142 @@
+-- Colony Request Thing
+--  Xizzle
+
+local COLONY = peripheral.wrap("right")
+local ME_SYS = peripheral.wrap("left")
+local OUT_INV = peripheral.wrap("front")
+local DISPLAY = peripheral.wrap("top")
+local REFRESH_RATE = 5
+
+function getRequiredItems()
+  local cReqs = COLONY.getRequests()
+  local res = {}
+  
+  for i=1,#cReqs do
+    local dObj = {}
+    local v = cReqs[i]
+    local meStock = ME_SYS.getItem({ name = v.items[1].name }).amount or 0
+
+    dObj.displayName = string.sub(v.desc, string.len(xUtils.strSplit(v.desc, " ")[1])+2)
+    dObj.name = v.items[1].name
+    dObj.count = v.count
+    dObj.item = v.items[1]
+    dObj.isDomum = string.find(dObj.name, "domum_ornamentum")
+    dObj.isCraftable = ME_SYS.isItemCraftable({ name = v.items[1].name })
+    dObj.isCrafting = ME_SYS.isItemCrafting({ name = v.items[1].name })
+    dObj.isInStock = v.count <= meStock
+    
+    if dObj.isDomum then
+      dObj.isCraftable = false
+      dObj.isCrafting = false
+      dObj.isInStock = false
+    end
+
+    res[#res+1] = dObj
+  end
+  
+  return res
+end
+
+function drawResults(res)
+  for _,req in pairs(res) do 
+    --Craftable
+    local statString = "<col:gray>   ?????   "
+    if req.isCraftable then statString = "<col:yellow> CRAFTABLE " 
+    else statString = "<col:red>UNAVAILABLE" end
+
+    if req.isCrafting then statString = "<col:orange>IS CRAFTING"  end
+
+    --Stock
+    if req.isInStock then statString = "<col:green> AVAILABLE " end
+
+    if req.isDomum then statString = "<col:lightGray>   DOMUM   " end
+
+    xUtils.bWrite("<i:2><col:lightGray>"..req.count.."<i:6><col:white>"..req.displayName.."<i:46>"..statString.."<br>", DISPLAY)
+  end
+end
+
+--Display
+function drawTopBar()
+  xUtils.scrPos(1, 1, DISPLAY)
+  xUtils.scrClearLine(colors.gray, DISPLAY)
+  xUtils.bPrint("<bcol:gray><col:yellow>Colony Requests<bcol:gray><col:lightGray><br>", DISPLAY)
+end
+
+function drawButtonBar()
+  local tw, th =  DISPLAY.getSize()
+  
+  xUtils.scrPos(1, th-1, DISPLAY)
+  xUtils.scrClearLine(colors.black, DISPLAY)
+  xUtils.scrPos(1, th, DISPLAY)
+  xUtils.scrClearLine(colors.gray, DISPLAY)
+
+  xUtils.scrPos(2, th, DISPLAY) --8
+  xUtils.bPrint("<bcol:orange><col:black> CRAFT ", DISPLAY)
+
+  xUtils.scrPos(10, th, DISPLAY) --12
+  xUtils.bPrint("<bcol:green><col:black> PUSH ", DISPLAY)
+end
+
+function clearContent()
+  local tw, th =  DISPLAY.getSize()
+  for i=2,th-1 do
+    xUtils.scrPos(1, i, DISPLAY)
+    xUtils.scrClearLine(colors.black, DISPLAY)
+  end
+  xUtils.scrPos(1,3, DISPLAY)
+end
+
+function reqCraftables(res)
+  for _,req in pairs(res) do 
+     if req.isCraftable and not req.isCrafting and not req.isInStock and not req.isDomum then
+      local crRes = ME_SYS.craftItem({ name = req.name, count = req.count }) 
+      if crRes then xUtils.bPrint("<col:lightGray>Requested <col:white>[<col:orange>CRAFT<col:white>]<col:lightGray> for <col:white>"..req.displayName.." <col:lightGray>[<col:yellow>"..req.count.."<col:lightGray>]")
+      else xUtils.bPrint("<col:red>Request FAILED for <col:white>[<col:orange>CRAFT<col:white>]<col:lightGray> for <col:white>"..req.displayName.." <col:lightGray>[<col:yellow>"..req.count.."<col:lightGray>]") end
+    end
+  end
+end
+
+function pushStock(res)
+  for _,req in pairs(res) do 
+    if req.isInStock and not req.isDomum then
+      local crRes = ME_SYS.exportItem({name=req.name, count=req.count}, "down") >= req.count
+      if crRes then xUtils.bPrint("<col:lightGray>Pushed <col:white>"..req.displayName.." <col:lightGray>[<col:yellow>"..req.count.."<col:lightGray>]")
+      else xUtils.bPrint("<col:red>FAILED to push <col:white>"..req.displayName.." <col:lightGray>[<col:yellow>"..req.count.."<col:lightGray>]") end
+    end
+  end
+
+  sleep(5) --allow time for distro
+end
+
+function refresh()
+  local tRes = getRequiredItems()
+  local wFunc = function() sleep(REFRESH_RATE) end
+  local uiFunc = function() handleButton(tRes) end
+
+  clearContent()
+  drawResults(tRes)
+  drawButtonBar()
+
+  parallel.waitForAny(uiFunc, wFunc)
+end
+
+function handleButton(res)
+  local event, side, x, y = os.pullEvent("monitor_touch")
+  local tw, th =  DISPLAY.getSize()
+
+  if y == th then
+    if x >= 2 and x <= 8 then reqCraftables(res) end --Craft Button
+    if x >= 10 and x <= 16 then pushStock(res) end --Craft Button
+  end
+
+  refresh()
+end
+
+DISPLAY.setTextScale(0.5)
+
+xUtils.scrClear()
+xUtils.bPrint("<col:white>Colony Supplier <col:green>running...")
+
+while true do
+  refresh()
+end
