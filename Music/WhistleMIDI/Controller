@@ -1,0 +1,80 @@
+MUSIC_KEYS = {
+  GN = { 1, "south", 4, "north", 7, "south" },
+  GS = { 1, "east", 4, "east", 7, "east" }, 
+  AN = { 1, "north", 4, "south", 7, "north" },
+  AS = { 1, "down", 4, "down", 8, "south" },
+  BN = { 1, "up", 4, "up", 8, "west" },
+  CN = { 2, "south", 5, "north", 8, "north" },
+  CS = { 2, "west", 5, "west", 9, "north" },
+  DN = { 2, "north", 5, "south", 9, "east" },
+  DS = { 2, "down", 5, "down", 9, "south" },
+  EN = { 2, "up", 5, "up", 10, "north" },
+  FN = { 3, "down", 6, "down", 10, "west" },
+  FS = { 3, "up", 6, "up", 10, "south" }
+}
+ 
+RSI = { 5,4,6,7,8,9,10,11,12,13 }
+NRD = { "GN", "GS", "AN", "AS", "BN", "CN", "CS", "DN", "DS", "EN", "FN", "FS" }
+
+local function init()
+  for i=1, #RSI do
+    RSI[i] = peripheral.wrap("redstoneIntegrator_"..tostring(RSI[i]))
+  end
+  stopAll()
+end
+ 
+function noteState(note, octave, state)
+  startIndex = (octave-1)*2
+
+  thisNDT = MUSIC_KEYS[note];
+  thisRSI = RSI[thisNDT[startIndex+1]]
+  thisDir = thisNDT[startIndex+2]
+  
+  while thisRSI.getOutput(thisDir) ~= state do
+    thisRSI.setOutput(thisDir, state)
+  end
+end
+
+function stopAll()
+  for oct=1, 3 do
+    for ni=1, #NRD do
+      --print("Stopping "..NRD[ni].." on octave "..tostring(oct))
+      noteState(NRD[ni], oct, false)
+    end    
+  end
+end
+
+function runTest()
+  for oct=1, 3 do
+    for ni=1, #NRD do
+      print("Playing "..NRD[ni].." on octave "..tostring(oct))
+      noteState(NRD[ni], oct, true)
+      sleep(0.2)
+      print("Stopping "..NRD[ni].." on octave "..tostring(oct))
+      noteState(NRD[ni], oct, false)
+    end    
+  end
+end
+
+function playSong(nme)
+  sFile = http.get("https://raw.githubusercontent.com/xzlbot-mc/ccstuff/refs/heads/main/Music/WhistleMIDI/"..nme)
+  
+  thisType = sFile.read(1)
+  if thisType == "K" then
+    --Key Event
+    thisNote = sFile.read(2)
+    thisOctave = sFile.read(1)
+    thisState = sFile.read(1)
+    
+    --Padding
+    sFile.read(2)
+    
+    if thisState == "U" then thisState = true else thisState = false end
+    noteState(thisNote, thisOctave, thisState)
+  else if thisType ==  "R" then
+    thisRest = tonumber(sFile.read(6))
+    sleep(1000/thisRest)
+  end
+end
+
+init()
