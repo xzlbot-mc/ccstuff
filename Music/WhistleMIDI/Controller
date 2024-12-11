@@ -69,8 +69,6 @@ function playSong(sFile)
     
     if thisState == "U" then thisState = true else thisState = false end
     noteState(thisNote, thisOctave, thisState)
-  end
-  
   elseif thisType ==  "R" then
     thisRest = tonumber(sFile.read(6))
     sleep(thisRest/1000)
