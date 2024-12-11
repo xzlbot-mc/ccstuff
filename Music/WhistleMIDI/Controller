@@ -62,14 +62,14 @@ function playSong(sFile)
     --Key Event
     thisNote = sFile.read(2)
     thisOctave = tonumber(sFile.read(1))
-    thisState = sFile.read(1)
+    stateTypes = { U = true, D = false }
+    thisState = stateTypes[sFile.read(1)]
     
     --Padding
     sFile.read(2)
-    
-    if thisState == "U" then thisState = true else thisState = false end
     noteState(thisNote, thisOctave, thisState)
-  elseif thisType ==  "R" then
+    
+  elseif thisType == "R" then
     thisRest = tonumber(sFile.read(6))
     sleep(thisRest/1000)
   end
