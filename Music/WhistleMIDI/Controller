@@ -56,14 +56,12 @@ function runTest()
   end
 end
 
-function playSong(nme)
-  sFile = http.get("https://raw.githubusercontent.com/xzlbot-mc/ccstuff/refs/heads/main/Music/WhistleMIDI/"..nme)
-  
+function playSong(sFile)
   thisType = sFile.read(1)
   if thisType == "K" then
     --Key Event
     thisNote = sFile.read(2)
-    thisOctave = sFile.read(1)
+    thisOctave = tonumber(sFile.read(1))
     thisState = sFile.read(1)
     
     --Padding
@@ -71,9 +69,11 @@ function playSong(nme)
     
     if thisState == "U" then thisState = true else thisState = false end
     noteState(thisNote, thisOctave, thisState)
-  else if thisType ==  "R" then
+  end
+  
+  elseif thisType ==  "R" then
     thisRest = tonumber(sFile.read(6))
-    sleep(1000/thisRest)
+    sleep(thisRest/1000)
   end
 end
 
